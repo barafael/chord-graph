@@ -1,0 +1,9 @@
+[package]
+name = "api"
+description = "Types shared between the chord-graph server and the browser app"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true

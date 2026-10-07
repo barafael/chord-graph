@@ -1,0 +1,15 @@
+[package]
+name = "chord-graph"
+description = "Seeds the voicing trie into SurrealDB and serves it over HTTP (`chord-graph seed` / `chord-graph serve`)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+surrealdb = { version = "2", features = ["kv-surrealkv"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs"] }

@@ -1,11 +1,10 @@
-mod chords;
+//! `chord-graph seed`: generates the voicing trie and writes it into the store, idempotently.
 
-use chords::{generate, symbols, Node, Symbol};
+use crate::chords::{generate, symbols, Node, Symbol};
+use crate::db::{open, Db};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::Surreal;
 
-const SCHEMA: &str = include_str!("../schema.surql");
 const BATCH: usize = 500;
 
 fn ints(p: &[i64]) -> String {
@@ -44,10 +43,11 @@ fn voicing_row(n: &Node, run: i64) -> String {
 fn relation_rows(n: &Node, run: i64) -> Vec<String> {
     n.fits
         .iter()
-        .map(|f| {
+        .enumerate()
+        .map(|(rank, f)| {
             format!(
-                "{{ id: voicing_symbol:[[{}], '{}'], in: {}, out: {}, fit: {}, root: {}, gen: {} }}",
-                ints(&n.pitches), f.symbol, vid(&n.pitches), sid(&f.symbol), f.fit, f.root, run
+                "{{ id: voicing_symbol:[[{}], '{}'], in: {}, out: {}, fit: {}, root: {}, rank: {}, label: '{}', gen: {} }}",
+                ints(&n.pitches), f.symbol, vid(&n.pitches), sid(&f.symbol), f.fit, f.root, rank, f.label, run
             )
         })
         .collect()
@@ -62,12 +62,9 @@ async fn insert(db: &Surreal<Db>, table: &str, rows: &[String], update: &str) ->
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> surrealdb::Result<()> {
+pub async fn run(path: &str) -> surrealdb::Result<()> {
     let started = Instant::now();
-    let db: Surreal<Db> = Surreal::new::<SurrealKv>("surreal.db").await?;
-    db.use_ns("chord_graph").use_db("chord_graph").await?;
-    db.query(SCHEMA).await?.check()?;
+    let db = open(path).await?;
 
     // Every row written by this run carries `gen`; rows left over from earlier runs are pruned afterwards.
     let run = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
@@ -81,7 +78,7 @@ async fn main() -> surrealdb::Result<()> {
 
     insert(&db, "chord_symbol", &symbol_rows, "symbol = $input.symbol, name = $input.name, root = $input.root, pcs = $input.pcs, gen = $input.gen").await?;
     insert(&db, "voicing", &voicing_rows, "names = $input.names, pitches = $input.pitches, top = $input.top, size = $input.size, mask = $input.mask, parent = $input.parent, emotions = $input.emotions, gen = $input.gen").await?;
-    insert(&db, "voicing_symbol", &relation_rows, "fit = $input.fit, root = $input.root, gen = $input.gen").await?;
+    insert(&db, "voicing_symbol", &relation_rows, "fit = $input.fit, root = $input.root, rank = $input.rank, label = $input.label, gen = $input.gen").await?;
 
     let mut pruned = db
         .query("DELETE voicing_symbol WHERE gen != $gen RETURN BEFORE; DELETE voicing WHERE gen != $gen RETURN BEFORE; DELETE chord_symbol WHERE gen != $gen RETURN BEFORE;")
