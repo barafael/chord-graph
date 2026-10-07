@@ -1,80 +1,110 @@
 mod chords;
 
-use chords::{generate, CHORD_TYPES};
-use surrealdb::engine::local::Db;
-use surrealdb::engine::local::SurrealKv;
+use chords::{generate, symbols, Node, Symbol};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::Surreal;
 
 const SCHEMA: &str = include_str!("../schema.surql");
+const BATCH: usize = 500;
 
-fn vid(p: &[i64]) -> String {
-    format!("voicing:[{}]", p.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "))
+fn ints(p: &[i64]) -> String {
+    p.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
 }
 
-async fn run_batches(db: &Surreal<Db>, stmts: &[String], chunk: usize) -> surrealdb::Result<()> {
-    for c in stmts.chunks(chunk) {
-        db.query(c.join(";\n")).await?.check()?;
+fn strs(s: &[String]) -> String {
+    s.iter().map(|x| format!("'{}'", x.replace('\'', "\\'"))).collect::<Vec<_>>().join(", ")
+}
+
+fn vid(p: &[i64]) -> String {
+    format!("voicing:[{}]", ints(p))
+}
+
+fn sid(symbol: &str) -> String {
+    format!("chord_symbol:⟨{}⟩", symbol)
+}
+
+fn symbol_row(s: &Symbol, run: i64) -> String {
+    format!(
+        "{{ id: {}, symbol: '{}', name: '{}', root: {}, pcs: [{}], gen: {} }}",
+        sid(&s.symbol), s.symbol, s.name, s.root, ints(&s.pcs), run
+    )
+}
+
+fn voicing_row(n: &Node, run: i64) -> String {
+    let last = n.pitches.len() - 1;
+    let parent = if last == 0 { "NONE".to_string() } else { vid(&n.pitches[..last]) };
+    let mask: i64 = n.pitches.iter().map(|&p| 1i64 << p).sum();
+    format!(
+        "{{ id: {}, names: [{}], pitches: [{}], top: {}, size: {}, mask: {}, parent: {}, emotions: [{}], gen: {} }}",
+        vid(&n.pitches), strs(&n.names), ints(&n.pitches), n.pitches[last], n.pitches.len(), mask, parent, strs(&n.emotions), run
+    )
+}
+
+fn relation_rows(n: &Node, run: i64) -> Vec<String> {
+    n.fits
+        .iter()
+        .map(|f| {
+            format!(
+                "{{ id: voicing_symbol:[[{}], '{}'], in: {}, out: {}, fit: {}, root: {}, gen: {} }}",
+                ints(&n.pitches), f.symbol, vid(&n.pitches), sid(&f.symbol), f.fit, f.root, run
+            )
+        })
+        .collect()
+}
+
+async fn insert(db: &Surreal<Db>, table: &str, rows: &[String], update: &str) -> surrealdb::Result<()> {
+    let relation = if table == "voicing_symbol" { "RELATION " } else { "" };
+    for chunk in rows.chunks(BATCH) {
+        let q = format!("INSERT {}INTO {} [\n{}\n] ON DUPLICATE KEY UPDATE {};", relation, table, chunk.join(",\n"), update);
+        db.query(q).await?.check()?;
     }
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> surrealdb::Result<()> {
+    let started = Instant::now();
     let db: Surreal<Db> = Surreal::new::<SurrealKv>("surreal.db").await?;
     db.use_ns("chord_graph").use_db("chord_graph").await?;
     db.query(SCHEMA).await?.check()?;
 
+    // Every row written by this run carries `gen`; rows left over from earlier runs are pruned afterwards.
+    let run = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+    let syms = symbols();
     let nodes = generate();
+    println!("generated {} symbols, {} voicings in {:.1?}", syms.len(), nodes.len(), started.elapsed());
 
-    let symbol_stmts: Vec<String> = CHORD_TYPES
-        .iter()
-        .map(|t| format!("UPSERT chord_symbol:⟨{}⟩ SET symbol = '{}';", t.symbol, t.symbol))
-        .collect();
+    let symbol_rows: Vec<String> = syms.iter().map(|s| symbol_row(s, run)).collect();
+    let voicing_rows: Vec<String> = nodes.iter().map(|n| voicing_row(n, run)).collect();
+    let relation_rows: Vec<String> = nodes.iter().flat_map(|n| relation_rows(n, run)).collect();
 
-    let mut voicing_stmts: Vec<String> = Vec::new();
-    for n in &nodes {
-        let id = vid(&n.pitches);
-        let last = n.pitches.len() - 1;
-        let parent = if last == 0 { "NONE".to_string() } else { vid(&n.pitches[..last]) };
-        let mask: i64 = n.pitches.iter().map(|&p| 1i64 << p).sum();
-        let pitches = n.pitches.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
-        let names = n.names.iter().map(|s| format!("'{}'", s)).collect::<Vec<_>>().join(", ");
-        let emotions = n.emotions.iter().map(|s| format!("'{}'", s)).collect::<Vec<_>>().join(", ");
-        voicing_stmts.push(format!(
-            "UPSERT {} SET names = [{}], pitches = [{}], root = {}, top = {}, size = {}, mask = {}, parent = {}, emotions = [{}];",
-            id, names, pitches, n.pitches[0], n.pitches[last], n.pitches.len(), mask, parent, emotions
-        ));
-    }
+    insert(&db, "chord_symbol", &symbol_rows, "symbol = $input.symbol, name = $input.name, root = $input.root, pcs = $input.pcs, gen = $input.gen").await?;
+    insert(&db, "voicing", &voicing_rows, "names = $input.names, pitches = $input.pitches, top = $input.top, size = $input.size, mask = $input.mask, parent = $input.parent, emotions = $input.emotions, gen = $input.gen").await?;
+    insert(&db, "voicing_symbol", &relation_rows, "fit = $input.fit, root = $input.root, gen = $input.gen").await?;
 
-    let mut rel_stmts: Vec<String> = Vec::new();
-    for n in &nodes {
-        let id = vid(&n.pitches);
-        for (sym, fit) in &n.fits {
-            rel_stmts.push(format!("DELETE voicing_symbol WHERE in = {} AND out = chord_symbol:⟨{}⟩;", id, sym));
-            rel_stmts.push(format!("RELATE {}->voicing_symbol->chord_symbol:⟨{}⟩ SET fit = {};", id, sym, fit));
-        }
-    }
-
-    run_batches(&db, &symbol_stmts, 100).await?;
-    run_batches(&db, &voicing_stmts, 100).await?;
-    run_batches(&db, &rel_stmts, 100).await?;
+    let mut pruned = db
+        .query("DELETE voicing_symbol WHERE gen != $gen RETURN BEFORE; DELETE voicing WHERE gen != $gen RETURN BEFORE; DELETE chord_symbol WHERE gen != $gen RETURN BEFORE;")
+        .bind(("gen", run))
+        .await?
+        .check()?;
+    let stale: usize = (0..3).map(|i| pruned.take::<Vec<serde_json::Value>>(i).map(|v| v.len()).unwrap_or(0)).sum();
+    println!("seeded in {:.1?}, pruned {} stale rows", started.elapsed(), stale);
 
     let mut res = db
         .query(
             "SELECT size, count() AS voicings FROM voicing GROUP BY size ORDER BY size; \
              SELECT count() AS relations FROM voicing_symbol GROUP ALL; \
-             SELECT pitches, names, emotions, (SELECT VALUE { symbol: out.symbol, fit: fit } FROM voicing_symbol WHERE in = $parent.id) AS fits FROM voicing WHERE pitches = [0, 4, 7]; \
-             SELECT pitches, names FROM voicing WHERE size = 7 LIMIT 3;",
+             SELECT pitches, names, emotions, ->voicing_symbol.{symbol: out.symbol, root, fit} AS fits FROM voicing WHERE pitches IN [[0, 4, 7], [0, 3, 8], [0, 4, 10]];",
         )
         .await?;
     let rings: Vec<serde_json::Value> = res.take(0)?;
     let rels: Vec<serde_json::Value> = res.take(1)?;
-    let triad: Vec<serde_json::Value> = res.take(2)?;
-    let deep: Vec<serde_json::Value> = res.take(3)?;
-    println!("symbols: {}", CHORD_TYPES.len());
+    let samples: Vec<serde_json::Value> = res.take(2)?;
     println!("rings: {}", serde_json::to_string(&rings).unwrap_or_default());
     println!("relations: {}", serde_json::to_string(&rels).unwrap_or_default());
-    println!("C major triad: {}", serde_json::to_string(&triad).unwrap_or_default());
-    println!("ring 7 samples: {}", serde_json::to_string(&deep).unwrap_or_default());
+    for s in &samples {
+        println!("sample: {}", serde_json::to_string(s).unwrap_or_default());
+    }
     Ok(())
 }
