@@ -1,12 +1,13 @@
 # chord-graph
 
-A trie of chord voicings in an embedded SurrealDB store, and a browser app for walking it one note at a time.
+A trie of chord voicings in an embedded SurrealDB store, and a browser app for walking it one note at a time:
+**https://barafael.github.io/chord-graph/**
 
 ```
 schema.surql          the SurrealDB schema (chord_symbol, voicing, voicing_symbol)
-crates/graph          `chord-graph seed` generates the trie; `chord-graph serve` exposes it as JSON + serves the app
-crates/api            the JSON types shared by server and app
-crates/app            the Leptos (client-side) app, built with Trunk
+crates/graph          `chord-graph seed` generates the trie; `chord-graph export` writes it as static JSON for the app
+crates/api            the data types shared by the exporter and the app
+crates/app            the Leptos (client-side) app, built with Trunk; public/data holds the exported trie
 surreal.db/           the SurrealKV store (gitignored, derived: rebuild it with `seed`)
 ```
 
@@ -14,12 +15,15 @@ surreal.db/           the SurrealKV store (gitignored, derived: rebuild it with 
 
 ```sh
 cargo run --release -p chord-graph -- seed            # a few minutes; idempotent
-(cd crates/app && trunk build --release)              # → crates/app/dist
-cargo run --release -p chord-graph -- serve           # http://127.0.0.1:8090
+cargo run --release -p chord-graph -- export          # → crates/app/public/data (257 files, 23 MB)
+cd crates/app && trunk serve                          # http://127.0.0.1:8091, live reload
 ```
 
-For development, `chord-graph serve` in one terminal and `trunk serve` (port 8091, proxies `/api`) in
-`crates/app` in another gives live reloads of the app.
+`trunk build --release` writes the static site to `crates/app/dist`. The GitHub Actions workflow in
+`.github/workflows/pages.yml` runs these steps on every push to `main` and deploys to GitHub Pages.
+
+The exported data is sharded so the app fetches one small file per voicing it shows: voicings of up to
+three notes are in `index.json`, deeper ones in a file per three-note prefix (`0,4,7.json`).
 
 ## The data
 

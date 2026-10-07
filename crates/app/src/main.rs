@@ -1,11 +1,15 @@
 //! The chord-graph app: a voicing in the middle, the notes that can be added around it as an n-gon.
-//! Data comes from `chord-graph serve` (`api/voicing/0,4,7`); views are hash routes (router.rs).
+//! Data comes from the static files written by `chord-graph export` (`data/{shard}.json`); views are
+//! hash routes (router.rs).
 
 mod audio;
 mod router;
 
-use api::{Child, Voicing};
+use api::{note_name, shard_key, Child, Reading, Row, Voicing};
 use leptos::prelude::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
@@ -14,16 +18,58 @@ fn main() {
     leptos::mount::mount_to_body(App);
 }
 
-async fn fetch_voicing(pitches: Vec<i64>) -> Result<Voicing, String> {
-    let path = pitches.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
+thread_local! {
+    static SHARDS: RefCell<HashMap<String, Rc<Vec<Row>>>> = RefCell::new(HashMap::new());
+}
+
+async fn fetch_text(url: &str) -> Result<String, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let resp = JsFuture::from(window.fetch_with_str(&format!("api/voicing/{path}"))).await.map_err(|_| "network error")?;
+    let resp = JsFuture::from(window.fetch_with_str(url)).await.map_err(|_| "network error")?;
     let resp: web_sys::Response = resp.dyn_into().map_err(|_| "bad response")?;
     if !resp.ok() {
-        return Err(format!("no such voicing ({})", resp.status()));
+        return Err(format!("{url}: {}", resp.status()));
     }
     let text = JsFuture::from(resp.text().map_err(|_| "bad body")?).await.map_err(|_| "bad body")?;
-    serde_json::from_str(&text.as_string().unwrap_or_default()).map_err(|e| e.to_string())
+    Ok(text.as_string().unwrap_or_default())
+}
+
+/// The data file holding a voicing and its children, fetched once and kept.
+async fn shard(key: &str) -> Result<Rc<Vec<Row>>, String> {
+    if let Some(s) = SHARDS.with(|c| c.borrow().get(key).cloned()) {
+        return Ok(s);
+    }
+    let text = fetch_text(&format!("data/{key}.json")).await?;
+    let rows: Vec<Row> = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let rows = Rc::new(rows);
+    SHARDS.with(|c| c.borrow_mut().insert(key.to_string(), rows.clone()));
+    Ok(rows)
+}
+
+fn readings(row: &Row) -> Vec<Reading> {
+    row.r.iter().map(|(symbol, label, root, fit)| Reading { symbol: symbol.clone(), label: label.clone(), root: *root, fit: *fit }).collect()
+}
+
+async fn fetch_voicing(pitches: Vec<i64>) -> Result<Voicing, String> {
+    let rows = shard(&shard_key(&pitches)).await?;
+    let node = rows.iter().find(|r| r.p == pitches).ok_or("no such voicing")?;
+    let mut children: Vec<Child> = rows
+        .iter()
+        .filter(|r| r.p.len() == pitches.len() + 1 && r.p.starts_with(&pitches))
+        .map(|r| {
+            let pitch = *r.p.last().unwrap_or(&0);
+            Child { pitch, note: note_name(pitch), names: r.n.clone(), emotions: r.e.clone(), readings: readings(r) }
+        })
+        .collect();
+    children.sort_by_key(|c| c.pitch);
+    Ok(Voicing {
+        notes: pitches.iter().map(|&p| note_name(p)).collect(),
+        parent: (pitches.len() > 1).then(|| pitches[..pitches.len() - 1].to_vec()),
+        pitches,
+        names: node.n.clone(),
+        emotions: node.e.clone(),
+        readings: readings(node),
+        children,
+    })
 }
 
 #[component]
