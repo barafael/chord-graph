@@ -14,11 +14,19 @@ pub fn parse(hash: &str) -> Vec<i64> {
 }
 
 pub fn href(p: &[i64]) -> String {
-    format!("#/{}", p.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(","))
+    format!(
+        "#/{}",
+        p.iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 fn current_hash() -> String {
-    web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default()
+    web_sys::window()
+        .and_then(|w| w.location().hash().ok())
+        .unwrap_or_default()
 }
 
 /// The current voicing, kept in sync with `hashchange`.
@@ -26,7 +34,8 @@ pub fn start() -> RwSignal<Vec<i64>> {
     let route = RwSignal::new(parse(&current_hash()));
     let on_change = Closure::<dyn FnMut()>::new(move || route.set(parse(&current_hash())));
     if let Some(w) = web_sys::window() {
-        let _ = w.add_event_listener_with_callback("hashchange", on_change.as_ref().unchecked_ref());
+        let _ =
+            w.add_event_listener_with_callback("hashchange", on_change.as_ref().unchecked_ref());
     }
     on_change.forget();
     route

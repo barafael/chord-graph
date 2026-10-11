@@ -9,7 +9,10 @@ mod export;
 mod seed;
 
 fn arg(args: &[String], name: &str, default: &str) -> String {
-    args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone()).unwrap_or_else(|| default.to_string())
+    args.windows(2)
+        .find(|w| w[0] == name)
+        .map(|w| w[1].clone())
+        .unwrap_or_else(|| default.to_string())
 }
 
 #[tokio::main]
@@ -20,7 +23,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("seed") => seed::run(&db).await?,
         Some("export") => export::run(&db, &arg(&args, "--out", "crates/app/public/data")).await?,
         _ => {
-            eprintln!("usage: chord-graph seed [--db PATH] | chord-graph export [--db PATH] [--out DIR]");
+            eprintln!(
+                "usage: chord-graph seed [--db PATH] | chord-graph export [--db PATH] [--out DIR]"
+            );
             std::process::exit(2);
         }
     }

@@ -5,7 +5,7 @@
 mod audio;
 mod router;
 
-use api::{note_name, shard_key, Child, Reading, Row, Voicing};
+use api::{Child, Reading, Row, Voicing, note_name, shard_key};
 use leptos::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -24,12 +24,16 @@ thread_local! {
 
 async fn fetch_text(url: &str) -> Result<String, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let resp = JsFuture::from(window.fetch_with_str(url)).await.map_err(|_| "network error")?;
+    let resp = JsFuture::from(window.fetch_with_str(url))
+        .await
+        .map_err(|_| "network error")?;
     let resp: web_sys::Response = resp.dyn_into().map_err(|_| "bad response")?;
     if !resp.ok() {
         return Err(format!("{url}: {}", resp.status()));
     }
-    let text = JsFuture::from(resp.text().map_err(|_| "bad body")?).await.map_err(|_| "bad body")?;
+    let text = JsFuture::from(resp.text().map_err(|_| "bad body")?)
+        .await
+        .map_err(|_| "bad body")?;
     Ok(text.as_string().unwrap_or_default())
 }
 
@@ -46,18 +50,35 @@ async fn shard(key: &str) -> Result<Rc<Vec<Row>>, String> {
 }
 
 fn readings(row: &Row) -> Vec<Reading> {
-    row.r.iter().map(|(symbol, label, root, fit)| Reading { symbol: symbol.clone(), label: label.clone(), root: *root, fit: *fit }).collect()
+    row.r
+        .iter()
+        .map(|(symbol, label, root, fit)| Reading {
+            symbol: symbol.clone(),
+            label: label.clone(),
+            root: *root,
+            fit: *fit,
+        })
+        .collect()
 }
 
 async fn fetch_voicing(pitches: Vec<i64>) -> Result<Voicing, String> {
     let rows = shard(&shard_key(&pitches)).await?;
-    let node = rows.iter().find(|r| r.p == pitches).ok_or("no such voicing")?;
+    let node = rows
+        .iter()
+        .find(|r| r.p == pitches)
+        .ok_or("no such voicing")?;
     let mut children: Vec<Child> = rows
         .iter()
         .filter(|r| r.p.len() == pitches.len() + 1 && r.p.starts_with(&pitches))
         .map(|r| {
             let pitch = *r.p.last().unwrap_or(&0);
-            Child { pitch, note: note_name(pitch), names: r.n.clone(), emotions: r.e.clone(), readings: readings(r) }
+            Child {
+                pitch,
+                note: note_name(pitch),
+                names: r.n.clone(),
+                emotions: r.e.clone(),
+                readings: readings(r),
+            }
         })
         .collect();
     children.sort_by_key(|c| c.pitch);
@@ -81,10 +102,10 @@ fn App() -> impl IntoView {
 
     // A voicing sounds when it arrives, once audio has been unlocked by a gesture.
     Effect::new(move |_| {
-        if let Some(v) = voicing() {
-            if audio::ready() {
-                audio::play(&v.pitches);
-            }
+        if let Some(v) = voicing()
+            && audio::ready()
+        {
+            audio::play(&v.pitches);
         }
     });
 
@@ -125,7 +146,13 @@ fn App() -> impl IntoView {
 
 /// Where a label sits relative to its vertex, so text never crosses the polygon.
 fn anchor(cos: f64) -> &'static str {
-    if cos > 0.35 { "start" } else if cos < -0.35 { "end" } else { "middle" }
+    if cos > 0.35 {
+        "start"
+    } else if cos < -0.35 {
+        "end"
+    } else {
+        "middle"
+    }
 }
 
 #[component]
@@ -136,19 +163,35 @@ fn Polygon(voicing: Voicing) -> impl IntoView {
     let pitches = voicing.pitches.clone();
     // The middle shows the best reading's symbol, and under it what that reading leaves out or doubles.
     let (symbol, omitted) = match voicing.readings.first() {
-        Some(r) => (r.symbol.clone(), r.label.split_once(" (").map(|(_, o)| o.trim_end_matches(')').to_string()).unwrap_or_default()),
+        Some(r) => (
+            r.symbol.clone(),
+            r.label
+                .split_once(" (")
+                .map(|(_, o)| o.trim_end_matches(')').to_string())
+                .unwrap_or_default(),
+        ),
         None => (voicing.notes.join("·"), String::new()),
     };
     let long = symbol.chars().count() > 6;
     let emotions = voicing.emotions.join(", ");
-    let symbol_y = if omitted.is_empty() && emotions.is_empty() { 512 } else { 492 };
+    let symbol_y = if omitted.is_empty() && emotions.is_empty() {
+        512
+    } else {
+        492
+    };
     let emotions_y = if omitted.is_empty() { 538 } else { 566 };
 
     let point = |i: usize| {
         let a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * i as f64 / n.max(1) as f64;
         (a.cos(), a.sin())
     };
-    let outline = (0..n).map(|i| { let (c, s) = point(i); format!("{:.1},{:.1}", C + R * c, C + R * s) }).collect::<Vec<_>>().join(" ");
+    let outline = (0..n)
+        .map(|i| {
+            let (c, s) = point(i);
+            format!("{:.1},{:.1}", C + R * c, C + R * s)
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
 
     // Crowded rings get labels along the spokes, so neighbours never overlap; sparse rings keep upright labels.
     let radial = n > 12;
@@ -190,7 +233,13 @@ fn Polygon(voicing: Voicing) -> impl IntoView {
         }
     }).collect_view();
 
-    let replay = { let p = voicing.pitches.clone(); move |_| { audio::unlock(); audio::play(&p); } };
+    let replay = {
+        let p = voicing.pitches.clone();
+        move |_| {
+            audio::unlock();
+            audio::play(&p);
+        }
+    };
     view! {
         <svg viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg">
             {(n >= 2).then(|| view! { <polygon class="line" points=outline /> })}
@@ -209,15 +258,20 @@ fn Polygon(voicing: Voicing) -> impl IntoView {
 
 #[component]
 fn Panel(voicing: Voicing) -> impl IntoView {
-    let path = voicing.pitches.iter().enumerate().map(|(i, _)| {
-        let prefix = voicing.pitches[..=i].to_vec();
-        let current = i + 1 == voicing.pitches.len();
-        let note = voicing.notes[i].clone();
-        view! {
-            {(i > 0).then(|| view! { <span class="dot">"·"</span> })}
-            <a href=router::href(&prefix) class:current=current>{note}</a>
-        }
-    }).collect_view();
+    let path = voicing
+        .pitches
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let prefix = voicing.pitches[..=i].to_vec();
+            let current = i + 1 == voicing.pitches.len();
+            let note = voicing.notes[i].clone();
+            view! {
+                {(i > 0).then(|| view! { <span class="dot">"·"</span> })}
+                <a href=router::href(&prefix) class:current=current>{note}</a>
+            }
+        })
+        .collect_view();
     let readings = voicing.readings.iter().map(|r| view! {
         <li>
             <span class="symbol">{r.symbol.clone()}</span>
@@ -225,7 +279,12 @@ fn Panel(voicing: Voicing) -> impl IntoView {
             <span class="fit" style=format!("--w: {}", r.fit)>{format!("{:.0}%", r.fit * 100.0)}</span>
         </li>
     }).collect_view();
-    let other_names: Vec<String> = voicing.names.iter().filter(|n| !voicing.readings.iter().any(|r| &r.label == *n)).cloned().collect();
+    let other_names: Vec<String> = voicing
+        .names
+        .iter()
+        .filter(|n| !voicing.readings.iter().any(|r| &r.label == *n))
+        .cloned()
+        .collect();
     view! {
         <h2>"Voicing"</h2>
         <div class="path">{path}</div>

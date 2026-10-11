@@ -36,11 +36,18 @@ pub struct Voicing {
     pub children: Vec<Child>,
 }
 
-pub const TONES: [&str; 12] = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
+pub const TONES: [&str; 12] = [
+    "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B",
+];
 
 /// "E", "E′", "C″", "C‴" for 4, 16, 24, 36.
 pub fn note_name(pitch: i64) -> String {
-    let marks = match pitch / 12 { 0 => "", 1 => "′", 2 => "″", _ => "‴" };
+    let marks = match pitch / 12 {
+        0 => "",
+        1 => "′",
+        2 => "″",
+        _ => "‴",
+    };
     format!("{}{}", TONES[(pitch % 12) as usize], marks)
 }
 
@@ -58,9 +65,17 @@ pub struct Row {
 /// deeper ones are sharded by their first three notes ("0,4,7"), and the three-note voicing itself is
 /// repeated in its shard so one file answers any request.
 pub fn shard_key(pitches: &[i64]) -> String {
-    if pitches.len() <= 2 { "index".to_string() } else { join(&pitches[..3]) }
+    if pitches.len() <= 2 {
+        "index".to_string()
+    } else {
+        join(&pitches[..3])
+    }
 }
 
 pub fn join(pitches: &[i64]) -> String {
-    pitches.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+    pitches
+        .iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }

@@ -2,7 +2,7 @@
 //! (see [`api::shard_key`]): `index.json` plus one file per three-note prefix.
 
 use crate::db::open;
-use api::{join, shard_key, Row};
+use api::{Row, join, shard_key};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -36,7 +36,10 @@ pub async fn run(path: &str, out: &str) -> Result<(), Box<dyn std::error::Error>
             p: v.pitches.clone(),
             n: v.names,
             e: v.emotions,
-            r: v.readings.into_iter().map(|r| (r.symbol, r.label, r.root, r.fit)).collect(),
+            r: v.readings
+                .into_iter()
+                .map(|r| (r.symbol, r.label, r.root, r.fit))
+                .collect(),
         };
         if v.pitches.len() <= 3 {
             shards.entry("index".into()).or_default().push(row.clone());
@@ -49,12 +52,18 @@ pub async fn run(path: &str, out: &str) -> Result<(), Box<dyn std::error::Error>
     let (mut files, mut bytes) = (0usize, 0usize);
     for (key, mut rows) in shards {
         rows.sort_by(|a, b| a.p.cmp(&b.p));
-        debug_assert!(rows.iter().all(|r| shard_key(&r.p) == key || r.p.len() == 3));
+        debug_assert!(
+            rows.iter()
+                .all(|r| shard_key(&r.p) == key || r.p.len() == 3)
+        );
         let json = serde_json::to_vec(&rows)?;
         bytes += json.len();
         files += 1;
         std::fs::write(format!("{out}/{key}.json"), json)?;
     }
-    println!("wrote {files} files, {:.1} MB, to {out}", bytes as f64 / 1e6);
+    println!(
+        "wrote {files} files, {:.1} MB, to {out}",
+        bytes as f64 / 1e6
+    );
     Ok(())
 }

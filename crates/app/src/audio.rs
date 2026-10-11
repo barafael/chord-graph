@@ -20,10 +20,10 @@ pub fn unlock() {
         if c.is_none() {
             *c = AudioContext::new().ok();
         }
-        if let Some(ctx) = c.as_ref() {
-            if ctx.state() == AudioContextState::Suspended {
-                let _ = ctx.resume();
-            }
+        if let Some(ctx) = c.as_ref()
+            && ctx.state() == AudioContextState::Suspended
+        {
+            let _ = ctx.resume();
         }
     });
 }
@@ -43,7 +43,9 @@ pub fn play(pitches: &[i64]) {
 fn play_in(ctx: &AudioContext, pitches: &[i64]) -> Result<(), wasm_bindgen::JsValue> {
     let t = ctx.current_time();
     let master = ctx.create_gain()?;
-    master.gain().set_value(0.45 / (pitches.len() as f32).sqrt());
+    master
+        .gain()
+        .set_value(0.45 / (pitches.len() as f32).sqrt());
     master.connect_with_audio_node(&ctx.destination())?;
 
     for &p in pitches {
@@ -52,8 +54,12 @@ fn play_in(ctx: &AudioContext, pitches: &[i64]) -> Result<(), wasm_bindgen::JsVa
         let filter = ctx.create_biquad_filter()?;
         filter.set_type(BiquadFilterType::Lowpass);
         filter.q().set_value(0.6);
-        filter.frequency().set_value_at_time((hz * 5.0).min(6000.0), t)?;
-        filter.frequency().exponential_ramp_to_value_at_time((hz * 1.6).max(200.0), t + LENGTH * 0.7)?;
+        filter
+            .frequency()
+            .set_value_at_time((hz * 5.0).min(6000.0), t)?;
+        filter
+            .frequency()
+            .exponential_ramp_to_value_at_time((hz * 1.6).max(200.0), t + LENGTH * 0.7)?;
 
         let env = ctx.create_gain()?;
         let g = env.gain();
